@@ -1,36 +1,41 @@
 -- =====================================================
--- 给admin用户分配完整的管理员权限
--- 让admin用户能在Admin Center看到所有功能
+-- 给admin用户分配完整的管理员权限 - 修复版本
+-- 自动适配数据库表结构
 -- =====================================================
 
--- 1. 检查当前admin用户的角色分配
+-- 1. 检查sys_roles表结构
+SELECT 'sys_roles_structure' as info_type;
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns 
+WHERE table_name = 'sys_roles' 
+  AND table_schema = 'public'
+ORDER BY ordinal_position;
+
+-- 2. 检查当前admin用户的角色分配
 SELECT 'current_admin_roles' as info_type,
     u.username,
     r.id as role_id,
     r.code as role_code,
-    r.name as role_name,
-    r.status as role_status
+    r.name as role_name
 FROM sys_users u
 LEFT JOIN sys_user_roles ur ON u.id = ur.user_id
 LEFT JOIN sys_roles r ON ur.role_id = r.id
 WHERE u.username = 'admin'
 ORDER BY r.code;
 
--- 2. 显示所有可用的角色
+-- 3. 显示所有可用的角色
 SELECT 'available_roles' as info_type,
     id,
     code,
     name,
-    status,
     description
 FROM sys_roles
-WHERE status = 'ACTIVE' OR status IS NULL
 ORDER BY code;
 
--- 3. 删除admin用户现有的角色分配（重新开始）
+-- 4. 删除admin用户现有的角色分配（重新开始）
 DELETE FROM sys_user_roles WHERE user_id = (SELECT id FROM sys_users WHERE username = 'admin');
 
--- 4. 分配所有管理员相关角色给admin用户
+-- 5. 分配所有角色给admin用户
 DO $$
 DECLARE
     admin_user_id VARCHAR(64);
@@ -44,11 +49,10 @@ BEGIN
         RAISE EXCEPTION 'Admin user not found';
     END IF;
     
-    -- 分配所有活跃角色给admin用户
+    -- 分配所有角色给admin用户
     FOR role_record IN 
         SELECT id, code, name 
         FROM sys_roles 
-        WHERE (status = 'ACTIVE' OR status IS NULL)
         ORDER BY code
     LOOP
         BEGIN
@@ -72,43 +76,99 @@ BEGIN
         EXCEPTION 
             WHEN unique_violation THEN
                 RAISE NOTICE '角色 % 已经分配给admin用户', role_record.code;
+            WHEN OTHERS THEN
+                RAISE NOTICE '分配角色 % 失败: %', role_record.code, SQLERRM;
         END;
     END LOOP;
     
     RAISE NOTICE '总共分配了 % 个角色给admin用户', assignment_count;
 END $$;
 
--- 5. 确保admin用户有SUPER_ADMIN或SYSTEM_ADMIN角色（如果不存在则创建）
+-- 6. 动态创建SUPER_ADMIN角色（如果不存在）
 DO $$
 DECLARE
     admin_user_id VARCHAR(64);
     super_admin_role_id VARCHAR(64);
-    system_admin_role_id VARCHAR(64);
+    has_created_at BOOLEAN;
+    has_updated_at BOOLEAN;
+    has_status BOOLEAN;
+    has_description BOOLEAN;
 BEGIN
     SELECT id INTO admin_user_id FROM sys_users WHERE username = 'admin';
     
-    -- 检查是否存在SUPER_ADMIN角色
-    SELECT id INTO super_admin_role_id FROM sys_roles WHERE code = 'SUPER_ADMIN' OR code = 'SYS_ADMIN';
+    -- 检查是否存在SUPER_ADMIN相关角色
+    SELECT id INTO super_admin_role_id 
+    FROM sys_roles 
+    WHERE code IN ('SUPER_ADMIN', 'SYS_ADMIN', 'SYSTEM_ADMIN', 'ADMIN')
+    LIMIT 1;
     
     IF super_admin_role_id IS NULL THEN
-        -- 创建SUPER_ADMIN角色
-        INSERT INTO sys_roles (
-            id,
-            code,
-            name,
-            description,
-            status,
-            created_at,
-            updated_at
-        ) VALUES (
-            'SUPER_ADMIN_ROLE',
-            'SUPER_ADMIN',
-            'Super Administrator',
-            'Full system access with all permissions',
-            'ACTIVE',
-            CURRENT_TIMESTAMP,
-            CURRENT_TIMESTAMP
-        ) ON CONFLICT (id) DO NOTHING;
+        -- 检查sys_roles表有哪些列
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'sys_roles' AND column_name = 'created_at'
+        ) INTO has_created_at;
+        
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'sys_roles' AND column_name = 'updated_at'
+        ) INTO has_updated_at;
+        
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'sys_roles' AND column_name = 'status'
+        ) INTO has_status;
+        
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'sys_roles' AND column_name = 'description'
+        ) INTO has_description;
+        
+        -- 根据表结构动态构建INSERT语句
+        IF has_created_at AND has_updated_at AND has_status AND has_description THEN
+            -- 完整版本
+            INSERT INTO sys_roles (
+                id, code, name, description, status, created_at, updated_at
+            ) VALUES (
+                'SUPER_ADMIN_ROLE',
+                'SUPER_ADMIN',
+                'Super Administrator',
+                'Full system access with all permissions',
+                'ACTIVE',
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            );
+        ELSIF has_status AND has_description THEN
+            -- 有status和description
+            INSERT INTO sys_roles (
+                id, code, name, description, status
+            ) VALUES (
+                'SUPER_ADMIN_ROLE',
+                'SUPER_ADMIN',
+                'Super Administrator',
+                'Full system access with all permissions',
+                'ACTIVE'
+            );
+        ELSIF has_description THEN
+            -- 只有description
+            INSERT INTO sys_roles (
+                id, code, name, description
+            ) VALUES (
+                'SUPER_ADMIN_ROLE',
+                'SUPER_ADMIN',
+                'Super Administrator',
+                'Full system access with all permissions'
+            );
+        ELSE
+            -- 最基础版本
+            INSERT INTO sys_roles (
+                id, code, name
+            ) VALUES (
+                'SUPER_ADMIN_ROLE',
+                'SUPER_ADMIN',
+                'Super Administrator'
+            );
+        END IF;
         
         super_admin_role_id := 'SUPER_ADMIN_ROLE';
         RAISE NOTICE '创建了SUPER_ADMIN角色';
@@ -130,48 +190,81 @@ BEGIN
     ) ON CONFLICT (id) DO NOTHING;
     
     RAISE NOTICE '分配SUPER_ADMIN角色给admin用户';
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE '创建SUPER_ADMIN角色失败: %', SQLERRM;
 END $$;
 
--- 6. 创建并分配所有必要的权限（如果权限表存在）
+-- 7. 创建并分配权限（如果权限表存在）
 DO $$
+DECLARE
+    has_permissions_table BOOLEAN;
+    has_role_permissions_table BOOLEAN;
+    has_created_at_perm BOOLEAN;
 BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.tables 
-               WHERE table_name = 'sys_permissions' 
-               AND table_schema = 'public') THEN
+    -- 检查权限相关表是否存在
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_name = 'sys_permissions' AND table_schema = 'public'
+    ) INTO has_permissions_table;
+    
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_name = 'sys_role_permissions' AND table_schema = 'public'
+    ) INTO has_role_permissions_table;
+    
+    IF has_permissions_table THEN
+        -- 检查sys_permissions表是否有created_at列
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'sys_permissions' AND column_name = 'created_at'
+        ) INTO has_created_at_perm;
         
         -- 创建管理员权限
-        INSERT INTO sys_permissions (id, code, name, type, resource, action, description, created_at) VALUES
-        ('perm-admin-all', 'ADMIN:*:*', 'All Admin Permissions', 'ADMIN', '*', '*', 'Full administrative access', CURRENT_TIMESTAMP),
-        ('perm-user-all', 'USER:*:*', 'All User Permissions', 'ADMIN', 'user', '*', 'Full user management access', CURRENT_TIMESTAMP),
-        ('perm-role-all', 'ROLE:*:*', 'All Role Permissions', 'ADMIN', 'role', '*', 'Full role management access', CURRENT_TIMESTAMP),
-        ('perm-system-all', 'SYSTEM:*:*', 'All System Permissions', 'ADMIN', 'system', '*', 'Full system access', CURRENT_TIMESTAMP),
-        ('perm-audit-all', 'AUDIT:*:*', 'All Audit Permissions', 'ADMIN', 'audit', '*', 'Full audit access', CURRENT_TIMESTAMP),
-        ('perm-config-all', 'CONFIG:*:*', 'All Config Permissions', 'ADMIN', 'config', '*', 'Full configuration access', CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO NOTHING;
+        IF has_created_at_perm THEN
+            INSERT INTO sys_permissions (id, code, name, type, resource, action, description, created_at) VALUES
+            ('perm-admin-all', 'ADMIN:*:*', 'All Admin Permissions', 'ADMIN', '*', '*', 'Full administrative access', CURRENT_TIMESTAMP),
+            ('perm-user-all', 'USER:*:*', 'All User Permissions', 'ADMIN', 'user', '*', 'Full user management access', CURRENT_TIMESTAMP),
+            ('perm-role-all', 'ROLE:*:*', 'All Role Permissions', 'ADMIN', 'role', '*', 'Full role management access', CURRENT_TIMESTAMP),
+            ('perm-system-all', 'SYSTEM:*:*', 'All System Permissions', 'ADMIN', 'system', '*', 'Full system access', CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO NOTHING;
+        ELSE
+            INSERT INTO sys_permissions (id, code, name, description) VALUES
+            ('perm-admin-all', 'ADMIN:*:*', 'All Admin Permissions', 'Full administrative access'),
+            ('perm-user-all', 'USER:*:*', 'All User Permissions', 'Full user management access'),
+            ('perm-role-all', 'ROLE:*:*', 'All Role Permissions', 'Full role management access'),
+            ('perm-system-all', 'SYSTEM:*:*', 'All System Permissions', 'Full system access')
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
         
-        -- 将权限分配给SUPER_ADMIN角色
-        INSERT INTO sys_role_permissions (id, role_id, permission_id, created_at) 
-        SELECT 
-            'rp-super-admin-' || p.id,
-            'SUPER_ADMIN_ROLE',
-            p.id,
-            CURRENT_TIMESTAMP
-        FROM sys_permissions p
-        WHERE p.id IN ('perm-admin-all', 'perm-user-all', 'perm-role-all', 'perm-system-all', 'perm-audit-all', 'perm-config-all')
-        ON CONFLICT (id) DO NOTHING;
+        -- 分配权限给SUPER_ADMIN角色（如果角色权限表存在）
+        IF has_role_permissions_table THEN
+            INSERT INTO sys_role_permissions (id, role_id, permission_id) 
+            SELECT 
+                'rp-super-admin-' || p.id,
+                'SUPER_ADMIN_ROLE',
+                p.id
+            FROM sys_permissions p
+            WHERE p.id IN ('perm-admin-all', 'perm-user-all', 'perm-role-all', 'perm-system-all')
+            ON CONFLICT (id) DO NOTHING;
+        END IF;
         
         RAISE NOTICE '创建并分配了管理员权限';
     ELSE
         RAISE NOTICE '权限表不存在，跳过权限分配';
     END IF;
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE '权限分配失败: %', SQLERRM;
 END $$;
 
--- 7. 验证最终结果
+-- 8. 验证最终结果
 SELECT 'final_admin_roles' as info_type,
     u.username,
     r.code as role_code,
     r.name as role_name,
-    r.status as role_status,
     ur.assigned_at
 FROM sys_users u
 JOIN sys_user_roles ur ON u.id = ur.user_id
@@ -179,40 +272,39 @@ JOIN sys_roles r ON ur.role_id = r.id
 WHERE u.username = 'admin'
 ORDER BY r.code;
 
--- 8. 统计admin用户的角色数量
+-- 9. 统计admin用户的角色数量
 SELECT 'admin_role_count' as info_type,
     COUNT(*) as total_roles
 FROM sys_users u
 JOIN sys_user_roles ur ON u.id = ur.user_id
 WHERE u.username = 'admin';
 
--- 9. 显示admin用户的权限（如果权限表存在）
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.tables 
-               WHERE table_name = 'sys_permissions' 
-               AND table_schema = 'public') THEN
-        
-        RAISE NOTICE '显示admin用户的权限...';
-        -- 这里可以添加权限查询，但为了简化先跳过详细显示
-    END IF;
-END $$;
+-- 10. 显示所有用户的角色分配情况（用于对比）
+SELECT 'all_users_roles' as info_type,
+    u.username,
+    COUNT(ur.role_id) as role_count,
+    STRING_AGG(r.code, ', ' ORDER BY r.code) as roles
+FROM sys_users u
+LEFT JOIN sys_user_roles ur ON u.id = ur.user_id
+LEFT JOIN sys_roles r ON ur.role_id = r.id
+GROUP BY u.username, u.id
+ORDER BY role_count DESC;
 
 -- =====================================================
 -- 使用说明:
 -- 
--- 执行此脚本后，admin用户应该能够:
--- 1. 看到Admin Center的所有菜单项
--- 2. 访问用户管理、角色管理、系统配置等功能
--- 3. 执行所有管理员操作
+-- 执行此脚本后:
+-- 1. admin用户将拥有所有可用角色
+-- 2. 如果需要，会创建SUPER_ADMIN角色
+-- 3. 会创建和分配相关权限（如果权限表存在）
 -- 
--- 如果还是看不到某些功能，可能的原因:
--- 1. 前端权限控制逻辑需要特定的角色名称
--- 2. 需要重新登录以刷新权限缓存
--- 3. 前端代码中硬编码了特定的权限检查
+-- 重要提醒:
+-- 1. 执行后请重新登录admin用户以刷新权限缓存
+-- 2. 检查脚本输出中的角色分配数量
+-- 3. 如果还是看不到菜单，可能需要检查前端权限控制逻辑
 -- 
--- 建议:
--- 1. 重新登录admin用户
--- 2. 检查浏览器控制台是否有权限相关错误
+-- 调试建议:
+-- 1. 查看浏览器开发者工具的Network标签，检查API调用
+-- 2. 查看Console标签，检查JavaScript错误
 -- 3. 检查前端代码中的权限验证逻辑
 -- =====================================================

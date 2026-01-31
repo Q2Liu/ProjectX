@@ -1,280 +1,162 @@
 -- =====================================================
--- 创建超级管理员用户 - 适配新的环境变量配置
--- JWT_SECRET=workflow-engine-jwt-secret-key-2026
--- ENCRYPTION_SECRET_KEY=workflow-aes-256-encryption-key!
--- 
--- 用户名: admin
--- 密码: admin123
+-- 超简化版本：给admin用户分配角色
+-- 只使用最基础的字段，完全避免列不存在的错误
 -- =====================================================
 
--- 删除可能存在的旧用户
-DELETE FROM sys_user_roles WHERE user_id = 'super-admin-001';
-DELETE FROM act_id_user WHERE id_ = 'super-admin-001';
-DELETE FROM sys_users WHERE id = 'super-admin-001' OR username = 'admin';
+-- 1. 首先更新admin用户的密码哈希（确保能登录）
+UPDATE sys_users 
+SET password_hash = '$2a$10$bTB3yyVtzpJw17uMI9pShOzAkm07MKZa2EyQhc4izBO1MdXXEiUiO'
+WHERE username = 'admin';
 
--- 1. 创建超级管理员用户
-INSERT INTO sys_users (
-    id, 
-    username, 
-    password_hash, 
-    email, 
-    display_name, 
-    full_name, 
-    phone, 
-    employee_id, 
-    position, 
-    status, 
-    language, 
-    must_change_password, 
-    created_at, 
-    updated_at,
-    created_by,
-    updated_by
-) VALUES (
-    'super-admin-001',
-    'admin',
-    '$2a$10$bTB3yyVtzpJw17uMI9pShOzAkm07MKZa2EyQhc4izBO1MdXXEiUiO',
-    'admin@company.com',
-    '超级管理员',
-    '超级管理员',
-    '+86-138-0000-0000',
-    'SA001',
-    'Super Administrator',
-    'ACTIVE',
-    'zh_CN',
-    false,
-    CURRENT_TIMESTAMP,
-    CURRENT_TIMESTAMP,
-    'system',
-    'system'
-);
+-- 2. 检查sys_user_roles表的实际结构
+SELECT 'sys_user_roles_columns' as info_type,
+    column_name,
+    data_type,
+    is_nullable
+FROM information_schema.columns 
+WHERE table_name = 'sys_user_roles' 
+  AND table_schema = 'public'
+ORDER BY ordinal_position;
 
--- 2. 分配所有系统角色
--- 系统管理员角色 (最高权限)
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-SYS_ADMIN_ROLE',
-    'super-admin-001',
-    'SYS_ADMIN_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
+-- 3. 检查admin用户和所有角色
+SELECT 'admin_user' as info_type, id, username FROM sys_users WHERE username = 'admin';
+SELECT 'all_roles' as info_type, id, code, name FROM sys_roles ORDER BY code;
 
--- 技术总监角色 (开发权限)
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-TECH_DIRECTOR_ROLE',
-    'super-admin-001',
-    'TECH_DIRECTOR_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
+-- 4. 删除admin用户现有的角色分配
+DELETE FROM sys_user_roles WHERE user_id = (SELECT id FROM sys_users WHERE username = 'admin');
 
--- 审计员角色 (审计权限)
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-AUDITOR_ROLE',
-    'super-admin-001',
-    'AUDITOR_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
+-- 5. 最简化的角色分配（只使用id, user_id, role_id三个基础字段）
+DO $$
+DECLARE
+    admin_user_id VARCHAR(64);
+    role_record RECORD;
+    assignment_count INTEGER := 0;
+BEGIN
+    -- 获取admin用户ID
+    SELECT id INTO admin_user_id FROM sys_users WHERE username = 'admin';
+    
+    IF admin_user_id IS NULL THEN
+        RAISE NOTICE 'Admin user not found!';
+        RETURN;
+    END IF;
+    
+    RAISE NOTICE 'Admin用户ID: %', admin_user_id;
+    
+    -- 分配所有角色给admin用户（只使用三个基础字段）
+    FOR role_record IN 
+        SELECT id, code, name 
+        FROM sys_roles 
+        ORDER BY code
+    LOOP
+        BEGIN
+            -- 只使用最基础的三个字段
+            INSERT INTO sys_user_roles (
+                id, 
+                user_id, 
+                role_id
+            ) VALUES (
+                'ur-admin-' || role_record.id,
+                admin_user_id,
+                role_record.id
+            );
+            
+            assignment_count := assignment_count + 1;
+            RAISE NOTICE '成功分配角色: % (%)', role_record.code, role_record.name;
+            
+        EXCEPTION 
+            WHEN unique_violation THEN
+                RAISE NOTICE '角色 % 已经分配', role_record.code;
+            WHEN OTHERS THEN
+                RAISE NOTICE '分配角色 % 失败: %', role_record.code, SQLERRM;
+        END;
+    END LOOP;
+    
+    RAISE NOTICE '总共成功分配了 % 个角色给admin用户', assignment_count;
+END $$;
 
--- 团队领导角色
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-TEAM_LEADER_ROLE',
-    'super-admin-001',
-    'TEAM_LEADER_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
-
--- 开发者角色
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-DEVELOPER_ROLE',
-    'super-admin-001',
-    'DEVELOPER_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
-
--- 业务用户角色
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-BUSINESS_USER_ROLE',
-    'super-admin-001',
-    'BUSINESS_USER_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
-
--- 管理者角色
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-MANAGER_ROLE',
-    'super-admin-001',
-    'MANAGER_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
-
--- 普通用户角色
-INSERT INTO sys_user_roles (
-    id,
-    user_id,
-    role_id,
-    assigned_at,
-    assigned_by
-) VALUES (
-    'ur-super-admin-001-USER_ROLE',
-    'super-admin-001',
-    'USER_ROLE',
-    CURRENT_TIMESTAMP,
-    'system'
-);
-
--- 3. 创建Activiti工作流引擎用户
-INSERT INTO act_id_user (
-    id_,
-    rev_,
-    first_,
-    last_,
-    display_name_,
-    email_,
-    pwd_,
-    picture_id_
-) VALUES (
-    'super-admin-001',
-    1,
-    '超级',
-    '管理员',
-    '超级管理员',
-    'admin@company.com',
-    '$2a$10$bTB3yyVtzpJw17uMI9pShOzAkm07MKZa2EyQhc4izBO1MdXXEiUiO',
-    NULL
-);
-
--- 4. 确保所有必要的角色存在（如果不存在则创建）
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'SYS_ADMIN_ROLE', 'SYS_ADMIN', 'System Administrator', 'ADMIN', 'Full system access', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'SYS_ADMIN_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'TECH_DIRECTOR_ROLE', 'TECH_DIRECTOR', 'Technical Director', 'DEVELOPER', 'Full development access with approval rights', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'TECH_DIRECTOR_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'AUDITOR_ROLE', 'AUDITOR', 'Auditor', 'ADMIN', 'System audit access', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'AUDITOR_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'TEAM_LEADER_ROLE', 'TEAM_LEADER', 'Team Leader', 'DEVELOPER', 'Team management and code review', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'TEAM_LEADER_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'DEVELOPER_ROLE', 'DEVELOPER', 'Developer', 'DEVELOPER', 'Development and testing access', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'DEVELOPER_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'BUSINESS_USER_ROLE', 'BUSINESS_USER', 'Business User', 'BU_UNBOUNDED', 'Standard business user access', 'ACTIVE', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'BUSINESS_USER_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'MANAGER_ROLE', 'MANAGER', 'Manager', 'BU_UNBOUNDED', 'Department manager with approval permissions', 'ACTIVE', false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'MANAGER_ROLE');
-
-INSERT INTO sys_roles (id, code, name, type, description, status, is_system, created_at, updated_at)
-SELECT 'USER_ROLE', 'USER', 'User', 'BU_UNBOUNDED', 'Regular user with basic permissions', 'ACTIVE', false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-WHERE NOT EXISTS (SELECT 1 FROM sys_roles WHERE id = 'USER_ROLE');
-
--- 5. 验证创建结果
+-- 6. 如果上面失败，尝试手动分配几个关键角色
+INSERT INTO sys_user_roles (id, user_id, role_id) 
 SELECT 
+    'ur-admin-manual-' || r.id,
     u.id,
-    u.username,
-    u.display_name,
-    u.email,
-    u.status,
-    STRING_AGG(r.name, ', ' ORDER BY r.name) as assigned_roles
-FROM sys_users u
-LEFT JOIN sys_user_roles ur ON u.id = ur.user_id
-LEFT JOIN sys_roles r ON ur.role_id = r.id
+    r.id
+FROM sys_users u, sys_roles r
 WHERE u.username = 'admin'
-GROUP BY u.id, u.username, u.display_name, u.email, u.status;
+  AND r.code IN ('SYS_ADMIN_ROLE', 'AUDITOR_ROLE', 'TECH_DIRECTOR_ROLE', 'DEVELOPER_ROLE', 'MANAGER_ROLE', 'USER_ROLE', 'BUSINESS_USER_ROLE')
+ON CONFLICT (id) DO NOTHING;
 
--- 6. 显示用户可访问的权限
-SELECT DISTINCT
-    p.code,
-    p.name,
-    p.type,
-    p.resource,
-    p.action,
-    p.description
+-- 7. 如果还是没有角色，创建一个基础的ADMIN角色并分配
+DO $$
+DECLARE
+    admin_user_id VARCHAR(64);
+    admin_role_count INTEGER;
+BEGIN
+    SELECT id INTO admin_user_id FROM sys_users WHERE username = 'admin';
+    
+    -- 检查admin用户是否有角色
+    SELECT COUNT(*) INTO admin_role_count
+    FROM sys_user_roles 
+    WHERE user_id = admin_user_id;
+    
+    IF admin_role_count = 0 THEN
+        RAISE NOTICE 'Admin用户没有角色，创建基础ADMIN角色';
+        
+        -- 创建基础ADMIN角色
+        INSERT INTO sys_roles (id, code, name) VALUES 
+        ('BASIC_ADMIN_ROLE', 'ADMIN', 'Administrator')
+        ON CONFLICT (id) DO NOTHING;
+        
+        -- 分配给admin用户
+        INSERT INTO sys_user_roles (id, user_id, role_id) VALUES 
+        ('ur-admin-basic', admin_user_id, 'BASIC_ADMIN_ROLE')
+        ON CONFLICT (id) DO NOTHING;
+        
+        RAISE NOTICE '创建并分配了基础ADMIN角色';
+    END IF;
+END $$;
+
+-- 8. 验证最终结果
+SELECT 'final_result' as info_type,
+    u.username,
+    r.code as role_code,
+    r.name as role_name
 FROM sys_users u
 JOIN sys_user_roles ur ON u.id = ur.user_id
 JOIN sys_roles r ON ur.role_id = r.id
-JOIN sys_role_permissions rp ON r.id = rp.role_id
-JOIN sys_permissions p ON rp.permission_id = p.id
 WHERE u.username = 'admin'
-ORDER BY p.type, p.resource, p.action;
+ORDER BY r.code;
+
+-- 9. 统计
+SELECT 'summary' as info_type,
+    COUNT(*) as total_roles_assigned
+FROM sys_user_roles ur
+JOIN sys_users u ON ur.user_id = u.id
+WHERE u.username = 'admin';
+
+-- 10. 显示admin用户的完整信息
+SELECT 'admin_final_info' as info_type,
+    u.id,
+    u.username,
+    u.password_hash,
+    u.status,
+    COUNT(ur.role_id) as role_count
+FROM sys_users u
+LEFT JOIN sys_user_roles ur ON u.id = ur.user_id
+WHERE u.username = 'admin'
+GROUP BY u.id, u.username, u.password_hash, u.status;
 
 -- =====================================================
 -- 使用说明:
--- 用户名: admin
--- 密码: admin123
 -- 
--- 该用户拥有以下权限:
--- 1. 系统管理员权限 - 用户管理、角色管理、系统配置等
--- 2. 技术总监权限 - 功能单元管理、审批权限
--- 3. 审计员权限 - 审计日志查看
--- 4. 团队领导权限 - 团队管理、代码审查
--- 5. 开发者权限 - 开发和测试访问
--- 6. 业务用户权限 - 标准业务用户访问
--- 7. 管理者权限 - 部门管理和审批权限
--- 8. 普通用户权限 - 基础用户权限
+-- 这个脚本:
+-- 1. 更新admin用户的密码哈希为正确的值
+-- 2. 只使用sys_user_roles表的三个基础字段 (id, user_id, role_id)
+-- 3. 尝试分配所有现有角色
+-- 4. 如果失败，手动分配关键角色
+-- 5. 如果还是没有角色，创建基础ADMIN角色
 -- 
--- 可以访问所有模块:
--- - Admin Center (管理中心) - 完整管理功能
--- - Developer Workstation (开发工作站) - 完整开发功能  
--- - User Portal (用户门户) - 完整业务功能
--- 
--- 环境变量配置:
--- JWT_SECRET=workflow-engine-jwt-secret-key-2026
--- ENCRYPTION_SECRET_KEY=workflow-aes-256-encryption-key!
+-- 执行后:
+-- 1. 查看输出中分配了多少个角色
+-- 2. 重新登录admin用户 (admin/admin123)
+-- 3. 检查Admin Center是否显示更多菜单
 -- =====================================================

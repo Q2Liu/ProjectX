@@ -1,0 +1,218 @@
+-- =====================================================
+-- 给admin用户分配完整的管理员权限
+-- 让admin用户能在Admin Center看到所有功能
+-- =====================================================
+
+-- 1. 检查当前admin用户的角色分配
+SELECT 'current_admin_roles' as info_type,
+    u.username,
+    r.id as role_id,
+    r.code as role_code,
+    r.name as role_name,
+    r.status as role_status
+FROM sys_users u
+LEFT JOIN sys_user_roles ur ON u.id = ur.user_id
+LEFT JOIN sys_roles r ON ur.role_id = r.id
+WHERE u.username = 'admin'
+ORDER BY r.code;
+
+-- 2. 显示所有可用的角色
+SELECT 'available_roles' as info_type,
+    id,
+    code,
+    name,
+    status,
+    description
+FROM sys_roles
+WHERE status = 'ACTIVE' OR status IS NULL
+ORDER BY code;
+
+-- 3. 删除admin用户现有的角色分配（重新开始）
+DELETE FROM sys_user_roles WHERE user_id = (SELECT id FROM sys_users WHERE username = 'admin');
+
+-- 4. 分配所有管理员相关角色给admin用户
+DO $$
+DECLARE
+    admin_user_id VARCHAR(64);
+    role_record RECORD;
+    assignment_count INTEGER := 0;
+BEGIN
+    -- 获取admin用户ID
+    SELECT id INTO admin_user_id FROM sys_users WHERE username = 'admin';
+    
+    IF admin_user_id IS NULL THEN
+        RAISE EXCEPTION 'Admin user not found';
+    END IF;
+    
+    -- 分配所有活跃角色给admin用户
+    FOR role_record IN 
+        SELECT id, code, name 
+        FROM sys_roles 
+        WHERE (status = 'ACTIVE' OR status IS NULL)
+        ORDER BY code
+    LOOP
+        BEGIN
+            INSERT INTO sys_user_roles (
+                id,
+                user_id,
+                role_id,
+                assigned_at,
+                assigned_by
+            ) VALUES (
+                'ur-admin-' || role_record.id,
+                admin_user_id,
+                role_record.id,
+                CURRENT_TIMESTAMP,
+                'system'
+            );
+            
+            assignment_count := assignment_count + 1;
+            RAISE NOTICE '分配角色: % (%) 给admin用户', role_record.code, role_record.name;
+            
+        EXCEPTION 
+            WHEN unique_violation THEN
+                RAISE NOTICE '角色 % 已经分配给admin用户', role_record.code;
+        END;
+    END LOOP;
+    
+    RAISE NOTICE '总共分配了 % 个角色给admin用户', assignment_count;
+END $$;
+
+-- 5. 确保admin用户有SUPER_ADMIN或SYSTEM_ADMIN角色（如果不存在则创建）
+DO $$
+DECLARE
+    admin_user_id VARCHAR(64);
+    super_admin_role_id VARCHAR(64);
+    system_admin_role_id VARCHAR(64);
+BEGIN
+    SELECT id INTO admin_user_id FROM sys_users WHERE username = 'admin';
+    
+    -- 检查是否存在SUPER_ADMIN角色
+    SELECT id INTO super_admin_role_id FROM sys_roles WHERE code = 'SUPER_ADMIN' OR code = 'SYS_ADMIN';
+    
+    IF super_admin_role_id IS NULL THEN
+        -- 创建SUPER_ADMIN角色
+        INSERT INTO sys_roles (
+            id,
+            code,
+            name,
+            description,
+            status,
+            created_at,
+            updated_at
+        ) VALUES (
+            'SUPER_ADMIN_ROLE',
+            'SUPER_ADMIN',
+            'Super Administrator',
+            'Full system access with all permissions',
+            'ACTIVE',
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        ) ON CONFLICT (id) DO NOTHING;
+        
+        super_admin_role_id := 'SUPER_ADMIN_ROLE';
+        RAISE NOTICE '创建了SUPER_ADMIN角色';
+    END IF;
+    
+    -- 分配SUPER_ADMIN角色给admin用户
+    INSERT INTO sys_user_roles (
+        id,
+        user_id,
+        role_id,
+        assigned_at,
+        assigned_by
+    ) VALUES (
+        'ur-admin-super-admin',
+        admin_user_id,
+        super_admin_role_id,
+        CURRENT_TIMESTAMP,
+        'system'
+    ) ON CONFLICT (id) DO NOTHING;
+    
+    RAISE NOTICE '分配SUPER_ADMIN角色给admin用户';
+END $$;
+
+-- 6. 创建并分配所有必要的权限（如果权限表存在）
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables 
+               WHERE table_name = 'sys_permissions' 
+               AND table_schema = 'public') THEN
+        
+        -- 创建管理员权限
+        INSERT INTO sys_permissions (id, code, name, type, resource, action, description, created_at) VALUES
+        ('perm-admin-all', 'ADMIN:*:*', 'All Admin Permissions', 'ADMIN', '*', '*', 'Full administrative access', CURRENT_TIMESTAMP),
+        ('perm-user-all', 'USER:*:*', 'All User Permissions', 'ADMIN', 'user', '*', 'Full user management access', CURRENT_TIMESTAMP),
+        ('perm-role-all', 'ROLE:*:*', 'All Role Permissions', 'ADMIN', 'role', '*', 'Full role management access', CURRENT_TIMESTAMP),
+        ('perm-system-all', 'SYSTEM:*:*', 'All System Permissions', 'ADMIN', 'system', '*', 'Full system access', CURRENT_TIMESTAMP),
+        ('perm-audit-all', 'AUDIT:*:*', 'All Audit Permissions', 'ADMIN', 'audit', '*', 'Full audit access', CURRENT_TIMESTAMP),
+        ('perm-config-all', 'CONFIG:*:*', 'All Config Permissions', 'ADMIN', 'config', '*', 'Full configuration access', CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO NOTHING;
+        
+        -- 将权限分配给SUPER_ADMIN角色
+        INSERT INTO sys_role_permissions (id, role_id, permission_id, created_at) 
+        SELECT 
+            'rp-super-admin-' || p.id,
+            'SUPER_ADMIN_ROLE',
+            p.id,
+            CURRENT_TIMESTAMP
+        FROM sys_permissions p
+        WHERE p.id IN ('perm-admin-all', 'perm-user-all', 'perm-role-all', 'perm-system-all', 'perm-audit-all', 'perm-config-all')
+        ON CONFLICT (id) DO NOTHING;
+        
+        RAISE NOTICE '创建并分配了管理员权限';
+    ELSE
+        RAISE NOTICE '权限表不存在，跳过权限分配';
+    END IF;
+END $$;
+
+-- 7. 验证最终结果
+SELECT 'final_admin_roles' as info_type,
+    u.username,
+    r.code as role_code,
+    r.name as role_name,
+    r.status as role_status,
+    ur.assigned_at
+FROM sys_users u
+JOIN sys_user_roles ur ON u.id = ur.user_id
+JOIN sys_roles r ON ur.role_id = r.id
+WHERE u.username = 'admin'
+ORDER BY r.code;
+
+-- 8. 统计admin用户的角色数量
+SELECT 'admin_role_count' as info_type,
+    COUNT(*) as total_roles
+FROM sys_users u
+JOIN sys_user_roles ur ON u.id = ur.user_id
+WHERE u.username = 'admin';
+
+-- 9. 显示admin用户的权限（如果权限表存在）
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables 
+               WHERE table_name = 'sys_permissions' 
+               AND table_schema = 'public') THEN
+        
+        RAISE NOTICE '显示admin用户的权限...';
+        -- 这里可以添加权限查询，但为了简化先跳过详细显示
+    END IF;
+END $$;
+
+-- =====================================================
+-- 使用说明:
+-- 
+-- 执行此脚本后，admin用户应该能够:
+-- 1. 看到Admin Center的所有菜单项
+-- 2. 访问用户管理、角色管理、系统配置等功能
+-- 3. 执行所有管理员操作
+-- 
+-- 如果还是看不到某些功能，可能的原因:
+-- 1. 前端权限控制逻辑需要特定的角色名称
+-- 2. 需要重新登录以刷新权限缓存
+-- 3. 前端代码中硬编码了特定的权限检查
+-- 
+-- 建议:
+-- 1. 重新登录admin用户
+-- 2. 检查浏览器控制台是否有权限相关错误
+-- 3. 检查前端代码中的权限验证逻辑
+-- =====================================================

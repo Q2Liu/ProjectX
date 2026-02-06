@@ -1,0 +1,7 @@
+方案 1：停止并重新启动所有容器
+
+docker-compose down
+docker-compose up -d
+方案 2：只重启 Redis 容器
+
+docker restart platform-redis

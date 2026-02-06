@@ -5,3 +5,9 @@ docker-compose up -d
 方案 2：只重启 Redis 容器
 
 docker restart platform-redis
+
+# 示例1：当前目录下的非默认命名文件
+docker-compose -f docker-compose-dev.yml --profile full up -d
+
+# 示例2：子目录下的默认命名文件
+docker-compose -f ./docker/docker-compose.yml --profile full up -d

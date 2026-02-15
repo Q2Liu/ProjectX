@@ -4,76 +4,24 @@
 -- 功能：清空待办任务、已处理任务、我的申请相关数据
 -- 
 -- 使用方法：
+-- 在数据库工具中，请逐条执行以下语句，或者使用命令行：
 -- psql -h localhost -U platform -d workflow_platform -f clear-user-portal-data.sql
 -- 
 -- 注意：此操作不可逆，请在执行前备份数据库！
 -- ============================================
 
-BEGIN;
-
--- 1. 清理流程实例数据（我的申请）
-TRUNCATE TABLE up_process_instance CASCADE;
-RAISE NOTICE '✓ 已清理流程实例数据 (up_process_instance)';
-
--- 2. 清理流程历史记录
-TRUNCATE TABLE up_process_history CASCADE;
-RAISE NOTICE '✓ 已清理流程历史记录 (up_process_history)';
-
--- 3. 清理流程草稿
-TRUNCATE TABLE up_process_draft CASCADE;
-RAISE NOTICE '✓ 已清理流程草稿 (up_process_draft)';
-
--- 4. 清理 Flowable 任务数据（待办任务和已处理任务）
--- 注意：这些表属于 Flowable 引擎，需要谨慎操作
-
--- 清理运行时任务（待办任务）
-TRUNCATE TABLE act_ru_task CASCADE;
-RAISE NOTICE '✓ 已清理运行时任务 (act_ru_task)';
-
--- 清理历史任务（已处理任务）
-TRUNCATE TABLE act_hi_taskinst CASCADE;
-RAISE NOTICE '✓ 已清理历史任务 (act_hi_taskinst)';
-
--- 清理历史活动实例
-TRUNCATE TABLE act_hi_actinst CASCADE;
-RAISE NOTICE '✓ 已清理历史活动实例 (act_hi_actinst)';
-
--- 清理历史流程实例
-TRUNCATE TABLE act_hi_procinst CASCADE;
-RAISE NOTICE '✓ 已清理历史流程实例 (act_hi_procinst)';
-
--- 清理运行时流程实例
-TRUNCATE TABLE act_ru_execution CASCADE;
-RAISE NOTICE '✓ 已清理运行时流程实例 (act_ru_execution)';
-
--- 清理运行时变量
-TRUNCATE TABLE act_ru_variable CASCADE;
-RAISE NOTICE '✓ 已清理运行时变量 (act_ru_variable)';
-
--- 清理历史变量
-TRUNCATE TABLE act_hi_varinst CASCADE;
-RAISE NOTICE '✓ 已清理历史变量 (act_hi_varinst)';
-
--- 清理身份链接
-TRUNCATE TABLE act_ru_identitylink CASCADE;
-TRUNCATE TABLE act_hi_identitylink CASCADE;
-RAISE NOTICE '✓ 已清理身份链接数据';
-
-COMMIT;
-
--- 输出完成信息
-DO $$
-BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '========================================';
-    RAISE NOTICE '数据清理完成！';
-    RAISE NOTICE '========================================';
-    RAISE NOTICE '已清理的数据包括：';
-    RAISE NOTICE '  - 我的申请（流程实例）';
-    RAISE NOTICE '  - 流程历史记录';
-    RAISE NOTICE '  - 流程草稿';
-    RAISE NOTICE '  - 待办任务';
-    RAISE NOTICE '  - 已处理任务';
-    RAISE NOTICE '  - Flowable 引擎相关数据';
-    RAISE NOTICE '========================================';
-END $$;
+-- 清理所有相关表（一次性执行）
+TRUNCATE TABLE 
+    up_process_instance,
+    up_process_history,
+    up_process_draft,
+    act_ru_task,
+    act_hi_taskinst,
+    act_hi_actinst,
+    act_hi_procinst,
+    act_ru_execution,
+    act_ru_variable,
+    act_hi_varinst,
+    act_ru_identitylink,
+    act_hi_identitylink
+CASCADE;

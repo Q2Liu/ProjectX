@@ -1,0 +1,65 @@
+-- =============================================================================
+-- 清理 Procurement Workflow (code = SIMPLE_APPROVAL_12) 的所有数据
+-- 按依赖关系从子表到父表的顺序删除
+-- =============================================================================
+
+DO $cleanup$
+DECLARE
+    v_fu_id BIGINT;
+BEGIN
+    SELECT id INTO v_fu_id FROM dw_function_units WHERE code = 'SIMPLE_APPROVAL_12';
+
+    IF v_fu_id IS NULL THEN
+        RAISE NOTICE 'Function unit SIMPLE_APPROVAL_12 not found, nothing to clean.';
+        RETURN;
+    END IF;
+
+    RAISE NOTICE 'Cleaning Procurement Workflow (id=%, code=SIMPLE_APPROVAL_12)...', v_fu_id;
+
+    -- 1. Process definitions (BPMN)
+    DELETE FROM dw_process_definitions WHERE function_unit_id = v_fu_id;
+    RAISE NOTICE '  Deleted process definitions';
+
+    -- 2. Form-table bindings
+    DELETE FROM dw_form_table_bindings
+    WHERE form_id IN (SELECT id FROM dw_form_definitions WHERE function_unit_id = v_fu_id);
+    RAISE NOTICE '  Deleted form-table bindings';
+
+    -- 3. Form definitions
+    DELETE FROM dw_form_definitions WHERE function_unit_id = v_fu_id;
+    RAISE NOTICE '  Deleted form definitions';
+
+    -- 4. Action definitions
+    DELETE FROM dw_action_definitions WHERE function_unit_id = v_fu_id;
+    RAISE NOTICE '  Deleted action definitions';
+
+    -- 5. Field definitions (子表，依赖 table_definitions)
+    DELETE FROM dw_field_definitions
+    WHERE table_id IN (SELECT id FROM dw_table_definitions WHERE function_unit_id = v_fu_id);
+    RAISE NOTICE '  Deleted field definitions';
+
+    -- 6. Foreign keys (如果有)
+    DELETE FROM dw_foreign_keys
+    WHERE table_id IN (SELECT id FROM dw_table_definitions WHERE function_unit_id = v_fu_id);
+    RAISE NOTICE '  Deleted foreign keys';
+
+    -- 7. Table definitions
+    DELETE FROM dw_table_definitions WHERE function_unit_id = v_fu_id;
+    RAISE NOTICE '  Deleted table definitions';
+
+    -- 8. Versions (42条快照记录)
+    DELETE FROM dw_versions WHERE function_unit_id = v_fu_id;
+    RAISE NOTICE '  Deleted versions';
+
+    -- 9. Function unit 本身
+    DELETE FROM dw_function_units WHERE id = v_fu_id;
+    RAISE NOTICE '  Deleted function unit';
+
+    RAISE NOTICE '========================================';
+    RAISE NOTICE 'Cleanup complete! You can now run:';
+    RAISE NOTICE '  00-create-function-unit.sql';
+    RAISE NOTICE '  01-create-tables.sql';
+    RAISE NOTICE '  02-create-bpmn-process.sql';
+    RAISE NOTICE '  03-form-table-bindings.sql';
+    RAISE NOTICE '========================================';
+END $cleanup$;

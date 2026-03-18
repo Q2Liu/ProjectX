@@ -1,0 +1,184 @@
+-- =====================================================
+-- 清理 qing 用户的所有 User Portal 数据
+-- 包括：待办任务、已完成任务、我的申请、草稿、收藏
+-- 用户 ID: 3ea6e998-da20-4109-9359-83275185c17b
+-- 注意：此操作不可逆，请在执行前备份数据库！
+-- =====================================================
+
+DO $$
+DECLARE
+    v_user_id VARCHAR := 'b8b15cc3-340e-4a24-b8ab-a6d28bc038fb';
+    v_deleted_count INT := 0;
+    v_total_deleted INT := 0;
+BEGIN
+    RAISE NOTICE '========================================';
+    RAISE NOTICE '开始清理用户 qing (%) 的所有数据...', v_user_id;
+    RAISE NOTICE '========================================';
+
+    -- =====================================================
+    -- 1. 收集所有相关流程实例 ID
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '1. 收集所有相关流程实例...';
+
+    CREATE TEMP TABLE temp_all_process_instances AS
+    SELECT DISTINCT proc_inst_id_
+    FROM act_hi_taskinst
+    WHERE assignee_ = v_user_id
+    UNION
+    SELECT DISTINCT proc_inst_id_
+    FROM act_hi_procinst
+    WHERE start_user_id_ = v_user_id;
+
+    SELECT COUNT(*) INTO v_deleted_count FROM temp_all_process_instances;
+    RAISE NOTICE '   找到 % 个相关流程实例', v_deleted_count;
+
+    -- =====================================================
+    -- 2. 删除运行时任务（待办任务）— 按流程实例 + assignee
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '2. 清理运行时任务...';
+
+    DELETE FROM wf_extended_task_info
+    WHERE task_id IN (
+        SELECT id_ FROM act_ru_task
+        WHERE assignee_ = v_user_id
+           OR proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances)
+    );
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条运行时任务扩展信息', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_ru_task
+    WHERE assignee_ = v_user_id
+       OR proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条运行时任务', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- =====================================================
+    -- 3. 删除历史任务（已完成任务）
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '3. 清理历史任务...';
+
+    DELETE FROM wf_extended_task_info
+    WHERE task_id IN (
+        SELECT id_ FROM act_hi_taskinst
+        WHERE assignee_ = v_user_id
+           OR proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances)
+    );
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史任务扩展信息', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_hi_taskinst
+    WHERE assignee_ = v_user_id
+       OR proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史任务记录', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- =====================================================
+    -- 4. 删除流程相关数据（按流程实例）
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '4. 清理流程相关数据...';
+
+    DELETE FROM act_hi_identitylink
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史身份链接', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_ru_identitylink
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条运行时身份链接', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_ru_variable
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条运行时变量', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- act_ru_task 已先删，现在可以安全删 act_ru_execution
+    DELETE FROM act_ru_execution
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条运行时执行实例', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_hi_actinst
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史活动实例', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_hi_varinst
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史变量实例', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_hi_detail
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条历史详情记录', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    DELETE FROM act_hi_procinst
+    WHERE proc_inst_id_ IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 个历史流程实例', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- =====================================================
+    -- 5. 删除 User Portal 数据
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '5. 清理 User Portal 数据...';
+
+    -- 流程历史记录（按流程实例）
+    DELETE FROM up_process_history
+    WHERE process_instance_id IN (SELECT proc_inst_id_ FROM temp_all_process_instances);
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条流程历史记录', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- 我的申请（流程实例记录）
+    DELETE FROM up_process_instance
+    WHERE start_user_id = v_user_id OR initiator_id = v_user_id;
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条我的申请记录', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- 流程草稿
+    DELETE FROM up_process_draft
+    WHERE user_id = v_user_id;
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条流程草稿', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- 收藏的流程
+    DELETE FROM up_favorite_process
+    WHERE user_id = v_user_id;
+    GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
+    RAISE NOTICE '   删除了 % 条收藏记录', v_deleted_count;
+    v_total_deleted := v_total_deleted + v_deleted_count;
+
+    -- =====================================================
+    -- 6. 清理临时表
+    -- =====================================================
+    DROP TABLE IF EXISTS temp_all_process_instances;
+
+    -- =====================================================
+    -- 完成
+    -- =====================================================
+    RAISE NOTICE '';
+    RAISE NOTICE '========================================';
+    RAISE NOTICE '清理完成！总共删除了 % 条记录', v_total_deleted;
+    RAISE NOTICE '========================================';
+
+END $$;
